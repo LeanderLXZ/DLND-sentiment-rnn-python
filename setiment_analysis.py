@@ -7,9 +7,10 @@ from collections import Counter
 # Hyperparameters
 lstm_size = 256
 lstm_layers = 1
-batch_size = 500
+batch_size = 256
 learning_rate = 0.001
 epochs = 10
+keep_probability = 0.5
 
 
 # Load data
@@ -26,7 +27,7 @@ with open('./labels.txt', 'r') as f:
 all_text = ''.join([c for c in reviews if c not in punctuation])
 reviews = all_text.split('\n')
 
-all_text = ' '.join([reviews])
+all_text = ' '.join(reviews)
 words = all_text.split()
 
 
@@ -162,11 +163,11 @@ with tf.Session(graph=graph) as sess:
         state = sess.run(initial_state)
 
         for batch_i, (x, y) in enumerate(get_batches(train_x, train_y, batch_size), 1):
-            feed_dict = {inputs_: x,
-                         labels_: y[:, None],
-                         keep_prob: keep_prob,
-                         initial_state: state}
-            loss, state, _ = sess.run([cost, final_state, optimizer], feed_dict=feed_dict)
+            feed = {inputs_: x,
+                    labels_: y[:, None],
+                    keep_prob: keep_probability,
+                    initial_state: state}
+            loss, state, _ = sess.run([cost, final_state, optimizer], feed_dict=feed)
 
             if iteration % 10 == 0:
                 val_acc = []
