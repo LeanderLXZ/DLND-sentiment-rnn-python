@@ -11,7 +11,8 @@ batch_size = 256
 learning_rate = 0.001
 epochs = 10
 keep_probability = 0.5
-
+version = '1'
+summary_path = './logs/' + version
 
 # Load data
 
@@ -85,9 +86,14 @@ graph = tf.Graph()
 
 # Add nodes to the graph
 with graph.as_default():
-    inputs_ = tf.placeholder(tf.int32, [None, None], name='inputs')
-    labels_ = tf.placeholder(tf.int32, [None, None], name='labels')
-    keep_prob = tf.placeholder(tf.float32, name='keep_prob')
+    with tf.name_scope('inputs'):
+        inputs_ = tf.placeholder(tf.int32, [None, None], name='inputs')
+
+    with tf.name_scope('labels'):
+        labels_ = tf.placeholder(tf.int32, [None, None], name='labels')
+
+    with tf.name_scope('keep_prob'):
+        keep_prob = tf.placeholder(tf.float32, name='keep_prob')
 
 
 # Embedding
@@ -96,47 +102,69 @@ with graph.as_default():
 embed_size = 300
 
 with graph.as_default():
-    embedding = tf.Variable(tf.random_uniform((n_words, embed_size), -1, 1))
-    embed = tf.nn.embedding_lookup(embedding, inputs_)
+    with tf.name_scope('embedding'):
+        embedding = tf.Variable(tf.random_uniform((n_words, embed_size), -1, 1), name='embedding')
+        embed = tf.nn.embedding_lookup(embedding, inputs_)
+        embed = tf.identity(embed, name='embed')
 
 
 # LSTM cell
 
 with graph.as_default():
-    def single_cell():
-        # Basic LSTM cell
-        lstm = tf.contrib.rnn.BasicLSTMCell(lstm_size, state_is_tuple=True, reuse=tf.get_variable_scope().reuse)
-        # Add dropout to the cell
-        drop = tf.contrib.rnn.DropoutWrapper(lstm, output_keep_prob=keep_prob)
+    with tf.name_scope('LSTM'):
+        def single_cell():
+            # Basic LSTM cell
+            lstm = tf.contrib.rnn.BasicLSTMCell(lstm_size, state_is_tuple=True, reuse=tf.get_variable_scope().reuse)
+            # Add dropout to the cell
+            drop = tf.contrib.rnn.DropoutWrapper(lstm, output_keep_prob=keep_prob)
 
-        return drop
+            return drop
 
-    # Stack up multiple LSTM layers, for deep learning
-    cell = tf.contrib.rnn.MultiRNNCell([single_cell() for _ in range(lstm_layers)], state_is_tuple=True)
-    # Getting an initial state of all zeros
-    initial_state = cell.zero_state(batch_size, tf.float32)
+        # Stack up multiple LSTM layers, for deep learning
+        cell = tf.contrib.rnn.MultiRNNCell([single_cell() for _ in range(lstm_layers)],
+                                           state_is_tuple=True)
+
+        # Getting an initial state of all zeros
+        initial_state = cell.zero_state(batch_size, tf.float32)
+        #  initial_state = tf.identity(initial_state, name='initial_state')
 
 
 # RNN forward pass
 
 with graph.as_default():
-    rnn_outputs, final_state = tf.nn.dynamic_rnn(cell, embed, initial_state=initial_state)
-
+    with tf.name_scope('forward_pass'):
+        rnn_outputs, final_state = tf.nn.dynamic_rnn(cell, embed, initial_state=initial_state)
+        #  rnn_outputs = tf.identity(rnn_outputs, name='rnn_outputs')
+        #  final_state = tf.identity(final_state, name='final_state')
+        #  tf.summary.histogram('rnn_outputs', rnn_outputs)
+        #  tf.summary.histogram('final_state', final_state)
 
 # Output
 
 with graph.as_default():
-    predictions = tf.contrib.layers.fully_connected(rnn_outputs[:, -1], 1, activation_fn=tf.sigmoid)
-    cost = tf.losses.mean_squared_error(labels_, predictions)
+    with tf.name_scope('prediction'):
+        predictions = tf.contrib.layers.fully_connected(rnn_outputs[:, -1], 1,
+                                                        activation_fn=tf.sigmoid)
+        #  predictions = tf.identity(predictions, name='predictions')
+        #  tf.summary.histogram('predictions', predictions)
 
-    optimizer = tf.train.AdamOptimizer(learning_rate).minimize(cost)
+        cost = tf.losses.mean_squared_error(labels_, predictions)
+        cost = tf.identity(cost, name='cost')
+        tf.summary.scalar('cost', cost)
+
+        optimizer = tf.train.AdamOptimizer(learning_rate).minimize(cost)
 
 
 # Validation accuracy
 
 with graph.as_default():
-    correct_pred = tf.equal(tf.cast(tf.round(predictions), tf.int32), labels_)
-    accuracy = tf.reduce_mean(tf.cast(correct_pred, tf.float32))
+    with tf.name_scope('validation'):
+        correct_pred = tf.equal(tf.cast(tf.round(predictions), tf.int32), labels_)
+        #  correct_pred = tf.identity(correct_pred, name='correct_pred')
+        #  tf.summary.histogram('correct_pred', correct_pred)
+
+        accuracy = tf.reduce_mean(tf.cast(correct_pred, tf.float32), name='accuracy')
+        tf.summary.scalar('accuracy', accuracy)
 
 
 # Batching
@@ -153,11 +181,16 @@ def get_batches(x, y, batch_size=100):
 
 # Save
 with graph.as_default():
-    saver = tf.train.Saver()
+    saver = tf.train.Saver(max_to_keep=100)
 
 # Train
 with tf.Session(graph=graph) as sess:
     sess.run(tf.global_variables_initializer())
+
+    merged = tf.summary.merge_all()
+    train_writer = tf.summary.FileWriter(summary_path + '/train', sess.graph)
+    val_writer = tf.summary.FileWriter(summary_path + '/validation')
+
     iteration = 1
     for e in range(epochs):
         state = sess.run(initial_state)
@@ -167,7 +200,10 @@ with tf.Session(graph=graph) as sess:
                     labels_: y[:, None],
                     keep_prob: keep_probability,
                     initial_state: state}
-            loss, state, _ = sess.run([cost, final_state, optimizer], feed_dict=feed)
+            train_summary, loss, state, _ = sess.run([merged, cost, final_state, optimizer],
+                                                     feed_dict=feed)
+
+            train_writer.add_summary(train_summary, iteration)
 
             if iteration % 10 == 0:
                 val_acc = []
@@ -177,8 +213,10 @@ with tf.Session(graph=graph) as sess:
                             labels_: y[:, None],
                             keep_prob: 1,
                             initial_state: val_state}
-                    batch_acc, val_state = sess.run([accuracy, final_state], feed_dict=feed)
+                    val_summary, batch_acc, val_state = sess.run([merged, accuracy, final_state],
+                                                                 feed_dict=feed)
                     val_acc.append(batch_acc)
+                val_writer.add_summary(val_summary, iteration)
                 print("Epoch: {}/{}".format(e, epochs),
                       "Iteration: {}".format(iteration),
                       "Train loss: {:.3f}".format(loss),
