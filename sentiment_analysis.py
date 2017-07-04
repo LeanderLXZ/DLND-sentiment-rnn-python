@@ -87,13 +87,13 @@ graph = tf.Graph()
 # Add nodes to the graph
 with graph.as_default():
     with tf.name_scope('inputs'):
-        inputs_ = tf.placeholder(tf.int32, [None, None], name='inputs')
+        inputs_ = tf.placeholder(tf.int32, [None, None])
 
     with tf.name_scope('labels'):
-        labels_ = tf.placeholder(tf.int32, [None, None], name='labels')
+        labels_ = tf.placeholder(tf.int32, [None, None])
 
     with tf.name_scope('keep_prob'):
-        keep_prob = tf.placeholder(tf.float32, name='keep_prob')
+        keep_prob = tf.placeholder(tf.float32)
 
 
 # Embedding
@@ -103,9 +103,12 @@ embed_size = 300
 
 with graph.as_default():
     with tf.name_scope('embedding'):
-        embedding = tf.Variable(tf.random_uniform((n_words, embed_size), -1, 1), name='embedding')
-        embed = tf.nn.embedding_lookup(embedding, inputs_)
-        embed = tf.identity(embed, name='embed')
+        with tf.name_scope('embedding'):
+            embedding = tf.Variable(tf.random_uniform((n_words, embed_size), -1, 1))
+        tf.summary.histogram('embedding', embedding)
+
+        with tf.name_scope('embed'):
+            embed = tf.nn.embedding_lookup(embedding, inputs_)
 
 
 # LSTM cell
@@ -117,16 +120,16 @@ with graph.as_default():
             lstm = tf.contrib.rnn.BasicLSTMCell(lstm_size, state_is_tuple=True, reuse=tf.get_variable_scope().reuse)
             # Add dropout to the cell
             drop = tf.contrib.rnn.DropoutWrapper(lstm, output_keep_prob=keep_prob)
-
             return drop
 
         # Stack up multiple LSTM layers, for deep learning
-        cell = tf.contrib.rnn.MultiRNNCell([single_cell() for _ in range(lstm_layers)],
-                                           state_is_tuple=True)
+        with tf.name_scope('lstm_cell'):
+            cell = tf.contrib.rnn.MultiRNNCell([single_cell() for _ in range(lstm_layers)],
+                                               state_is_tuple=True)
 
         # Getting an initial state of all zeros
-        initial_state = cell.zero_state(batch_size, tf.float32)
-        #  initial_state = tf.identity(initial_state, name='initial_state')
+        with tf.name_scope('initial_state'):
+            initial_state = cell.zero_state(batch_size, tf.float32)
 
 
 # RNN forward pass
@@ -134,36 +137,33 @@ with graph.as_default():
 with graph.as_default():
     with tf.name_scope('forward_pass'):
         rnn_outputs, final_state = tf.nn.dynamic_rnn(cell, embed, initial_state=initial_state)
-        #  rnn_outputs = tf.identity(rnn_outputs, name='rnn_outputs')
-        #  final_state = tf.identity(final_state, name='final_state')
-        #  tf.summary.histogram('rnn_outputs', rnn_outputs)
-        #  tf.summary.histogram('final_state', final_state)
 
 # Output
 
 with graph.as_default():
     with tf.name_scope('prediction'):
-        predictions = tf.contrib.layers.fully_connected(rnn_outputs[:, -1], 1,
-                                                        activation_fn=tf.sigmoid)
-        #  predictions = tf.identity(predictions, name='predictions')
-        #  tf.summary.histogram('predictions', predictions)
+        with tf.name_scope('predictions'):
+            predictions = tf.contrib.layers.fully_connected(rnn_outputs[:, -1], 1,
+                                                            activation_fn=tf.sigmoid)
+        tf.summary.histogram('predictions', predictions)
 
-        cost = tf.losses.mean_squared_error(labels_, predictions)
-        cost = tf.identity(cost, name='cost')
+        with tf.name_scope('cost'):
+            cost = tf.losses.mean_squared_error(labels_, predictions)
         tf.summary.scalar('cost', cost)
 
-        optimizer = tf.train.AdamOptimizer(learning_rate).minimize(cost)
+        with tf.name_scope('optimizer'):
+            optimizer = tf.train.AdamOptimizer(learning_rate).minimize(cost)
 
 
 # Validation accuracy
 
 with graph.as_default():
     with tf.name_scope('validation'):
-        correct_pred = tf.equal(tf.cast(tf.round(predictions), tf.int32), labels_)
-        #  correct_pred = tf.identity(correct_pred, name='correct_pred')
-        #  tf.summary.histogram('correct_pred', correct_pred)
+        with tf.name_scope('correct_pred'):
+            correct_pred = tf.equal(tf.cast(tf.round(predictions), tf.int32), labels_)
 
-        accuracy = tf.reduce_mean(tf.cast(correct_pred, tf.float32), name='accuracy')
+        with tf.name_scope('accuracy'):
+            accuracy = tf.reduce_mean(tf.cast(correct_pred, tf.float32))
         tf.summary.scalar('accuracy', accuracy)
 
 
@@ -185,11 +185,12 @@ with graph.as_default():
 
 # Train
 with tf.Session(graph=graph) as sess:
-    sess.run(tf.global_variables_initializer())
 
     merged = tf.summary.merge_all()
     train_writer = tf.summary.FileWriter(summary_path + '/train', sess.graph)
     val_writer = tf.summary.FileWriter(summary_path + '/validation')
+
+    sess.run(tf.global_variables_initializer())
 
     iteration = 1
     for e in range(epochs):
@@ -217,6 +218,7 @@ with tf.Session(graph=graph) as sess:
                                                                  feed_dict=feed)
                     val_acc.append(batch_acc)
                 val_writer.add_summary(val_summary, iteration)
+
                 print("Epoch: {}/{}".format(e, epochs),
                       "Iteration: {}".format(iteration),
                       "Train loss: {:.3f}".format(loss),
@@ -224,4 +226,4 @@ with tf.Session(graph=graph) as sess:
 
             iteration += 1
 
-    saver.save(sess, "checkpoints/sentiment.ckpt")
+    saver.save(sess, "./checkpoints/sentiment.ckpt")
